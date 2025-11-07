@@ -115,7 +115,7 @@ public class SlidingKMVSketch {
     public static class Bucket {
         public Entry[] entries;   // Array of 'k' entries (size k)
         public int lock;          // Lock bit: 0 (deactivated) or 1 (activated)
-        public long lock_time;    // Time when the lock was set
+        public AdjustedTimestamp lock_time;  // Time when the lock was set (using AT)
         public long lock_maxV;    // Upper-bound hash value (use Long.MAX_VALUE initially)
         public int head;          // Index (0 to k-1) of entry with highest hash value in sliding window
         
@@ -125,7 +125,7 @@ public class SlidingKMVSketch {
                 this.entries[i] = new Entry(N);
             }
             this.lock = 0;
-            this.lock_time = 0;
+            this.lock_time = new AdjustedTimestamp(N);  // Initialize AT for lock time
             this.lock_maxV = Long.MAX_VALUE;
             this.head = 0;
         }
@@ -133,7 +133,7 @@ public class SlidingKMVSketch {
         @Override
         public String toString() {
             StringBuilder sb = new StringBuilder();
-            sb.append(String.format("Bucket{lock=%d, lock_time=%d, lock_maxV=%d, head=%d, entries=[", 
+            sb.append(String.format("Bucket{lock=%d, lock_time=%s, lock_maxV=%d, head=%d, entries=[", 
                      lock, lock_time, lock_maxV, head));
             for (int i = 0; i < entries.length; i++) {
                 if (i > 0) sb.append(", ");
@@ -277,8 +277,8 @@ public class SlidingKMVSketch {
         
         // Step 2: Check and Reset P2C Lock Zone (Section IV-A, Step 1)
         
-        // Check Lock Timeout
-        if (bucket.lock == 1 && (T - bucket.lock_time >= N)) {
+        // Check Lock Timeout (using AT lookup)
+        if (bucket.lock == 1 && !bucket.lock_time.lookup(T)) {
             bucket.lock = 0;
         }
         
@@ -287,7 +287,10 @@ public class SlidingKMVSketch {
             Entry headEntry = bucket.entries[bucket.head];
             if (!headEntry.t.lookup(T)) {  // Use AT lookup method
                 bucket.lock = 1;
-                bucket.lock_time = T;
+                // Lock time should remain at previous value (when head was last valid)
+                // Set lock_time to head entry's timestamp + N
+                long headTimestamp = getActualTimestamp(headEntry.t, T);
+                bucket.lock_time.record(headTimestamp);
                 bucket.lock_maxV = Long.MAX_VALUE;
             }
         }
@@ -317,24 +320,29 @@ public class SlidingKMVSketch {
     private void updateNoLock(Bucket bucket, long h_y, long currentTime) {
         Entry headEntry = bucket.entries[bucket.head];
         
-        // Subcase 1a: h_y is smaller than head's hash value
-        if (h_y < headEntry.h) {
-            // Find an empty or outdated entry to insert
-            int insertIndex = findInsertPosition(bucket, currentTime);
-            if (insertIndex != -1) {
-                bucket.entries[insertIndex].h = h_y;
-                bucket.entries[insertIndex].t.record(currentTime);  // Use AT record method
-                updateHead(bucket, currentTime);
+        // Find an empty or outdated entry to insert
+        int insertIndex = findInsertPosition(bucket, currentTime);
+        if (insertIndex != -1) {
+            // Found empty or outdated position, insert new item
+            bucket.entries[insertIndex].h = h_y;
+            bucket.entries[insertIndex].t.record(currentTime);
+            
+            // Update head to point to maximum hash value in window
+
+            if (h_y < headEntry.h) {
+                bucket.head = insertIndex;
             }
-        }
-        // Subcase 1b: Check for empty or outdated entries even if h_y >= head
-        else {
-            int insertIndex = findInsertPosition(bucket, currentTime);
-            if (insertIndex != -1) {
-                bucket.entries[insertIndex].h = h_y;
-                bucket.entries[insertIndex].t.record(currentTime);  // Use AT record method
-                updateHead(bucket, currentTime);
+        } else {
+            // No empty/outdated position, compare with head
+            if (h_y < headEntry.h) {
+            // Replace head with new smaller value
+            bucket.entries[bucket.head].h = h_y;
+            bucket.entries[bucket.head].t.record(currentTime);
+            
+            // Find new head (maximum hash value in window)
+            updateHead(bucket, currentTime);
             }
+            // If h_y >= headEntry.h, reject (not in k-minimum)
         }
     }
     
@@ -517,8 +525,8 @@ public class SlidingKMVSketch {
      * Update bucket status for querying
      */
     private void updateBucketStatus(Bucket bucket) {
-        // Check Lock Timeout
-        if (bucket.lock == 1 && (T - bucket.lock_time >= N)) {
+        // Check Lock Timeout (using AT lookup)
+        if (bucket.lock == 1 && !bucket.lock_time.lookup(T)) {
             bucket.lock = 0;
         }
         
@@ -527,7 +535,7 @@ public class SlidingKMVSketch {
             Entry headEntry = bucket.entries[bucket.head];
             if (!headEntry.t.lookup(T)) {  // Use AT lookup method
                 bucket.lock = 1;
-                bucket.lock_time = T;
+                bucket.lock_time.record(T);  // Record lock time using AT
                 bucket.lock_maxV = Long.MAX_VALUE;
             }
         }
