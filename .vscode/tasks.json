@@ -1,0 +1,14 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Maven Compile",
+			"type": "shell",
+			"command": "mvn compile",
+			"problemMatcher": [
+				"$java"
+			],
+			"group": "build"
+		}
+	]
+}
