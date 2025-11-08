@@ -40,7 +40,7 @@
                 <configuration>
                     <archive>
                         <manifest>
-                            <mainClass>com.example.slidingdistinctcounter.ExperimentRunner</mainClass>
+                            <mainClass>com.example.slidingdistinctcounter.Main</mainClass>
                         </manifest>
                     </archive>
                 </configuration>
