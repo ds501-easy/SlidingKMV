@@ -12,12 +12,18 @@ package com.example.slidingdistinctcounter;
  * 
  * @author Research Implementation
  */
-public class SlidingKMVSketch {
+public class SKMV {
     
     // Core parameters
-    private final long N;      // Window length (time units)
-    private final int k;       // k-minimum value count per bucket
-    private final int m;       // Number of buckets
+    private final long N;          // Window length (time units)
+    private final int k;           // k-minimum value count per bucket
+    private final int m;           // Number of buckets
+    private final int delta1;      // Bit-width for hash values (hash range: [0, 2^delta1 - 1])
+    private final int delta2;      // Bit-width for timestamps (timestamp range: [0, 2^delta2 - 1])
+    
+    // Computed ranges based on bit-widths
+    private final long hashRange;      // 2^delta1 - 1
+    private final long timestampRange; // 2^delta2 - 1
     
     // Global state
     private long T;           // Current global time (initialized to 0)
@@ -92,15 +98,18 @@ public class SlidingKMVSketch {
     public static class Entry {
         public long h;                    // Hash value of the k-minimum
         public AdjustedTimestamp t;       // Compressed arrival timestamp
+        public long maxHashValue;         // Maximum hash value for this entry (2^delta1 - 1)
         
-        public Entry(long N) {
-            this.h = Long.MAX_VALUE;      // Initialize to maximum (indicates empty)
+        public Entry(long N, long maxHashValue) {
+            this.h = maxHashValue;        // Initialize to maximum (indicates empty)
             this.t = new AdjustedTimestamp(N);  // Initialize compressed timestamp
+            this.maxHashValue = maxHashValue;
         }
         
-        public Entry(long h, long N) {
+        public Entry(long h, long N, long maxHashValue) {
             this.h = h;
             this.t = new AdjustedTimestamp(N);
+            this.maxHashValue = maxHashValue;
         }
         
         @Override
@@ -116,17 +125,19 @@ public class SlidingKMVSketch {
         public Entry[] entries;   // Array of 'k' entries (size k)
         public int lock;          // Lock bit: 0 (deactivated) or 1 (activated)
         public AdjustedTimestamp lock_time;  // Time when the lock was set (using AT)
-        public long lock_maxV;    // Upper-bound hash value (use Long.MAX_VALUE initially)
+        public long lock_maxV;    // Upper-bound hash value
         public int head;          // Index (0 to k-1) of entry with highest hash value in sliding window
+        public long maxHashValue; // Maximum hash value for this bucket (2^delta1 - 1)
         
-        public Bucket(int k, long N) {
+        public Bucket(int k, long N, long maxHashValue) {
             this.entries = new Entry[k];
+            this.maxHashValue = maxHashValue;
             for (int i = 0; i < k; i++) {
-                this.entries[i] = new Entry(N);
+                this.entries[i] = new Entry(N, maxHashValue);
             }
             this.lock = 0;
             this.lock_time = new AdjustedTimestamp(N);  // Initialize AT for lock time
-            this.lock_maxV = Long.MAX_VALUE;
+            this.lock_maxV = maxHashValue;  // Initialize to max hash value
             this.head = 0;
         }
         
@@ -150,18 +161,48 @@ public class SlidingKMVSketch {
      * @param N Window length (time units)
      * @param k k-minimum value count per bucket
      * @param m Number of buckets
+     * @param delta1 Bit-width for hash values (hash range: [0, 2^delta1 - 1])
+     * @param delta2 Bit-width for timestamps (timestamp range: [0, 2^delta2 - 1])
      */
-    public SlidingKMVSketch(long N, int k, int m) {
+    public SKMV(long N, int k, int m, int delta1, int delta2) {
         this.N = N;
         this.k = k;
         this.m = m;
+        this.delta1 = delta1;
+        this.delta2 = delta2;
         this.T = 0;
+        
+        // Calculate ranges based on bit-widths
+        // For delta1 bits: range is [0, 2^delta1 - 1]
+        this.hashRange = (1L << delta1) - 1;
+        // For delta2 bits: range is [0, 2^delta2 - 1]
+        this.timestampRange = (1L << delta2) - 1;
+        
+        // Validate that N fits within the timestamp range
+        if (N > timestampRange / 2) {
+            throw new IllegalArgumentException(
+                String.format("Window size N=%d exceeds half of timestamp range (2^%d - 1)/2 = %d",
+                    N, delta2, timestampRange / 2));
+        }
         
         // Initialize bucket array
         this.C = new Bucket[m];
         for (int i = 0; i < m; i++) {
-            this.C[i] = new Bucket(k, N);
+            this.C[i] = new Bucket(k, N, hashRange);
         }
+    }
+    
+    /**
+     * Convenience constructor with default bit-widths
+     * delta1 = 64 (full long range for hash values)
+     * delta2 = 48 (sufficient for most timestamp ranges)
+     * 
+     * @param N Window length (time units)
+     * @param k k-minimum value count per bucket
+     * @param m Number of buckets
+     */
+    public SKMV(long N, int k, int m) {
+        this(N, k, m, 64, 48);
     }
     
     /**
@@ -174,19 +215,21 @@ public class SlidingKMVSketch {
         // FNV-1a hash for bucket assignment
         long hash = fnv1aHash64(flowLabel);
         return (int) ((hash & Long.MAX_VALUE) % m);
-        }
-        
-        /**
-         * Hash function h(): Produces uniform hash value for elements using MurmurHash3
-         * 
-         * @param elementID The element identifier
-         * @return Uniform hash value in range [0, Long.MAX_VALUE]
-         */
+    }
+    
+    /**
+     * Hash function h(): Produces uniform hash value for elements using MurmurHash3
+     * Respects delta1 bit-width constraint
+     * 
+     * @param elementID The element identifier
+     * @return Uniform hash value in range [0, 2^delta1 - 1]
+     */
     private long h(long elementID) {
         // MurmurHash3 for uniform hash distribution
         long hash = murmurHash3_64(elementID, 0x9747b28c);  // Fixed seed for reproducibility
-        return hash & Long.MAX_VALUE;  // Ensure positive value in range [0, Long.MAX_VALUE]
-        }
+        // Mask to delta1 bits: ensures hash is in range [0, 2^delta1 - 1]
+        return hash & hashRange;
+    }
         
         /**
          * FNV-1a 64-bit hash implementation
@@ -291,7 +334,7 @@ public class SlidingKMVSketch {
                 // Set lock_time to head entry's timestamp + N
                 long headTimestamp = getActualTimestamp(headEntry.t, T);
                 bucket.lock_time.record(headTimestamp);
-                bucket.lock_maxV = Long.MAX_VALUE;
+                bucket.lock_maxV = bucket.maxHashValue;  // Reset to max hash value
             }
         }
         
@@ -380,7 +423,7 @@ public class SlidingKMVSketch {
     private int findInsertPosition(Bucket bucket, long currentTime) {
         // First try to find empty entry
         for (int i = 0; i < k; i++) {
-            if (bucket.entries[i].h == Long.MAX_VALUE) {
+            if (bucket.entries[i].h == bucket.entries[i].maxHashValue) {
                 return i;
             }
         }
@@ -417,7 +460,7 @@ public class SlidingKMVSketch {
         for (int i = 0; i < k; i++) {
             Entry entry = bucket.entries[i];
             // Only consider entries in sliding window using AT lookup
-            if (entry.h != Long.MAX_VALUE && entry.t.lookup(currentTime)) {
+            if (entry.h != entry.maxHashValue && entry.t.lookup(currentTime)) {
                 if (entry.h > maxHash) {
                     maxHash = entry.h;
                     maxIndex = i;
@@ -464,7 +507,7 @@ public class SlidingKMVSketch {
             
             // If timestamp was cleaned (outdated), also clear the hash value
             if (bucket.entries[j].t.getRawValue() == 2 * N) {
-                bucket.entries[j].h = Long.MAX_VALUE;
+                bucket.entries[j].h = bucket.entries[j].maxHashValue;  // Reset to max hash value (empty)
             }
         }
         
@@ -482,8 +525,7 @@ public class SlidingKMVSketch {
      */
     public double estimateCardinality() {
         double harmonicSum = 0.0;
-        
-        // Iterate through all buckets
+        int effectiveM = m;       // Iterate through all buckets
         for (int i = 0; i < m; i++) {
             Bucket bucket = C[i];
             
@@ -494,6 +536,8 @@ public class SlidingKMVSketch {
             java.util.List<Long> hashValues = collectValidHashValues(bucket);
             
             if (hashValues.isEmpty()) {
+                effectiveM--;        // Count actual non-empty buckets for accurate estimation
+
                 continue; // Skip empty buckets
             }
             
@@ -504,8 +548,9 @@ public class SlidingKMVSketch {
             long alpha_k = hashValues.get(kPrime - 1); // k'-th minimum (largest of k' values)
             
             // Calculate per-bucket cardinality using KMV formula
-            // n̂_i = k' / α_k' - 1
-            double n_i = (double) kPrime / alpha_k * Long.MAX_VALUE - 1;
+            // n̂_i = k' / α_k' * (hashRange) - 1
+            // Use hashRange (2^delta1 - 1) instead of Long.MAX_VALUE
+            double n_i = (double) kPrime / alpha_k * hashRange - 1;
             
             // Add to harmonic sum
             if (n_i > 0) {
@@ -513,12 +558,15 @@ public class SlidingKMVSketch {
             }
         }
         
+        
         // Return harmonic mean: n̂ = m / Σ(1/n̂_i)
-        if (harmonicSum > 0) {
-            return m / harmonicSum;
+        if (harmonicSum > 0 && effectiveM > 0) {
+            return effectiveM / harmonicSum;
         } else {
             return 0.0;
-        }
+            }
+            }
+
     }
     
     /**
@@ -536,7 +584,7 @@ public class SlidingKMVSketch {
             if (!headEntry.t.lookup(T)) {  // Use AT lookup method
                 bucket.lock = 1;
                 bucket.lock_time.record(T);  // Record lock time using AT
-                bucket.lock_maxV = Long.MAX_VALUE;
+                bucket.lock_maxV = bucket.maxHashValue;  // Reset to max hash value
             }
         }
     }
@@ -551,7 +599,7 @@ public class SlidingKMVSketch {
             Entry entry = bucket.entries[i];
             
             // Check if entry is in sliding window using AT lookup
-            if (entry.h != Long.MAX_VALUE && entry.t.lookup(T)) {
+            if (entry.h != entry.maxHashValue && entry.t.lookup(T)) {
                 // Special case: If lock=1, exclude head entry
                 if (bucket.lock == 1 && i == bucket.head) {
                     continue;
@@ -568,5 +616,9 @@ public class SlidingKMVSketch {
     public long getWindowSize() { return N; }
     public int getK() { return k; }
     public int getM() { return m; }
+    public int getDelta1() { return delta1; }
+    public int getDelta2() { return delta2; }
+    public long getHashRange() { return hashRange; }
+    public long getTimestampRange() { return timestampRange; }
     public Bucket getBucket(int index) { return C[index]; }
 }
