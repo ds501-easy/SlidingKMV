@@ -21,8 +21,8 @@ public class DataProcessor {
         System.out.println("Processing CAIDA traffic files from: " + inputFolder);
         System.out.println("=".repeat(80));
         
-        // Process all 60 minute files (o0.txt to o59.txt)
-        for (int fileNum = 0; fileNum < 60; fileNum++) {
+        // Process all 60 minute files (o1.txt to o60.txt)
+        for (int fileNum = 1; fileNum <= 60; fileNum++) {
             String inputFileName = "o" + fileNum + ".txt";
             String outputFileName = "o" + fileNum + "timestamp.txt";
             
@@ -78,8 +78,9 @@ public class DataProcessor {
         double itemsPerSecond = totalItems / 60.0;
         System.out.println("  Items per second (avg): " + String.format("%.2f", itemsPerSecond));
         
-        // Base timestamp: minuteNumber * 60 (converts minute to seconds)
-        int baseTimestamp = minuteNumber * 60;
+        // Base timestamp: (minuteNumber - 1) * 60 (converts minute to seconds)
+        // File o1.txt is minute 0, o2.txt is minute 1, ..., o60.txt is minute 59
+        int baseTimestamp = (minuteNumber - 1) * 60;
         
         // Write output file with timestamps
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(outputFilePath))) {
