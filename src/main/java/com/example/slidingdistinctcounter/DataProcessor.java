@@ -127,6 +127,131 @@ public class DataProcessor {
         }
         
         try {
+            // Step 1: Process CAIDA files to add timestamps
+            // processCAIDATrafficFiles(caidaFolder);
+            
+            // Step 2: Collect flow cardinality for various sliding windows
+            collectFlowCardinality(caidaFolder);
+            
+        } catch (IOException e) {
+            System.err.println("Error processing CAIDA files: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+    
+    /**
+     * Collect flow cardinality (distinct srcIP per dstIP) for various sliding windows
+     * 
+     * @param inputFolder Path to folder containing o#timestamp.txt files
+     * @throws IOException If file reading/writing fails
+     */
+    public static void collectFlowCardinality(String inputFolder) throws IOException {
+        System.out.println("Collecting flow cardinality for sliding windows");
+        System.out.println("=".repeat(80));
+        
+        // Define window sizes in minutes
+        int[] windowSizes = {1, 5, 10, 15, 30, 60};
+        
+        for (int N : windowSizes) {
+            System.out.println("\nProcessing window size N = " + N + " minute(s)");
+            collectFlowCardinalityForWindowSize(inputFolder, N);
+        }
+        
+        System.out.println("\n" + "=".repeat(80));
+        System.out.println("Flow cardinality collection completed!");
+    }
+    
+    /**
+     * Collect flow cardinality for a specific window size
+     * 
+     * @param inputFolder Path to folder containing o#timestamp.txt files
+     * @param N Window size in minutes
+     * @throws IOException If file reading/writing fails
+     */
+    private static void collectFlowCardinalityForWindowSize(String inputFolder, int N) 
+            throws IOException {
+        
+        int totalMinutes = 60;
+        int numWindows = totalMinutes - N + 1; // Number of sliding windows
+        
+        System.out.println("  Total sliding windows: " + numWindows);
+        
+        for (int startMinute = 1; startMinute <= numWindows; startMinute++) {
+            int endMinute = startMinute + N - 1;
+            
+            // Create output filename: SummaryDst_N_X_start_Y.txt
+            String outputFileName = String.format("SummaryDst_N_%d_start_%d.txt", N, startMinute);
+            Path outputPath = Paths.get(inputFolder, outputFileName);
+            
+            System.out.println("  Processing window [" + startMinute + ", " + endMinute + "] -> " + outputFileName);
+            
+            // Collect flow cardinality for this window
+            Map<String, Set<String>> flowCardinality = new HashMap<>();
+            
+            // Read all files in this window
+            for (int minute = startMinute; minute <= endMinute; minute++) {
+                String inputFileName = "o" + minute + "timestamp.txt";
+                Path inputPath = Paths.get(inputFolder, inputFileName);
+                
+                if (!Files.exists(inputPath)) {
+                    System.err.println("    Warning: File not found - " + inputPath);
+                    continue;
+                }
+                
+                // Read file and collect srcIP per dstIP
+                try (BufferedReader reader = new BufferedReader(new FileReader(inputPath.toString()))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        line = line.trim();
+                        if (line.isEmpty() || line.startsWith("#")) {
+                            continue;
+                        }
+                        
+                        String[] parts = line.split("\\s+");
+                        if (parts.length < 3) {
+                            continue;
+                        }
+                        
+                        String srcIP = parts[0];
+                        String dstIP = parts[1];
+                        // String timestamp = parts[2]; // Not needed for cardinality
+                        
+                        // Add srcIP to the set of sources for this dstIP (flow)
+                        flowCardinality.computeIfAbsent(dstIP, k -> new HashSet<>()).add(srcIP);
+                    }
+                }
+            }
+            
+            // Write flow cardinality to output file
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(outputPath.toString()))) {
+                // Sort flows by dstIP for consistent output
+                List<String> sortedFlows = new ArrayList<>(flowCardinality.keySet());
+                Collections.sort(sortedFlows);
+                
+                for (String dstIP : sortedFlows) {
+                    int cardinality = flowCardinality.get(dstIP).size();
+                    // Write: dstIP cardinality
+                    writer.write(dstIP + " " + cardinality);
+                    writer.newLine();
+                }
+            }
+            
+            System.out.println("    Flows found: " + flowCardinality.size());
+        }
+    }
+    
+    /**
+     * Main method for standalone execution of CAIDA processing (original)
+     */
+    public static void main_processTimestamps(String[] args) {
+        String caidaFolder = "C:\\Users\\hwa281\\UFL Dropbox\\Haibo Wang\\CAIDA";
+        
+        // Allow custom folder path from command line
+        if (args.length > 0) {
+            caidaFolder = args[0];
+        }
+        
+        try {
             processCAIDATrafficFiles(caidaFolder);
         } catch (IOException e) {
             System.err.println("Error processing CAIDA files: " + e.getMessage());
