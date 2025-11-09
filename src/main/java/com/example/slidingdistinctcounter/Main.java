@@ -61,8 +61,9 @@ public class Main {
             int bitsPerEntry = delta1 + delta2;
             
             // Memory per bucket: k entries + bucket overhead
-            // Overhead: lock (1 bit) + lock_time (delta2 bits) + lock_maxV (delta1 bits) + head (32 bits for int)
-            int bucketOverheadBits = 1 + delta2 + delta1 + 32;
+            // Overhead: lock (1 bit) + lock_time (delta2 bits) + lock_maxV (delta1 bits) + head (log2(k+1) bits)
+            int headBits = (int) Math.ceil(Math.log(k + 1) / Math.log(2));
+            int bucketOverheadBits = 1 + delta2 + delta1 + headBits;
             int bitsPerBucket = k * bitsPerEntry + bucketOverheadBits;
             
             // Convert total memory from bytes to bits
@@ -213,9 +214,9 @@ public class Main {
         }
         
         // Parameter lists for iteration
-        int[] delta1_list = {16, 32, 64};           // Hash value bit-widths
-        int[] delta2_list = {16, 24, 32};           // Timestamp bit-widths
-        int[] k_list = {32, 64, 128};               // k-minimum values
+        int[] delta1_list = {16, 32};           // Hash value bit-widths
+        int[] delta2_list = {8, 16};           // Timestamp bit-widths
+        int[] k_list = {4, 8 , 16, 32, 64};               // k-minimum values
         long[] memory_list = {1024, 4096, 16384};   // Memory budgets in bytes (1KB, 4KB, 16KB)
         
         // Window size N (can be adjusted based on dataset)
