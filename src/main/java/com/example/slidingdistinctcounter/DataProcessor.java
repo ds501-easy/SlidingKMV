@@ -150,7 +150,7 @@ public class DataProcessor {
         System.out.println("=".repeat(80));
         
         // Define window sizes in minutes
-        int[] windowSizes = {1, 5, 10, 15, 30, 60};
+        int[] windowSizes = {1, 5, 10, 30};
         
         for (int N : windowSizes) {
             System.out.println("\nProcessing window size N = " + N + " minute(s)");
@@ -176,12 +176,19 @@ public class DataProcessor {
         
         System.out.println("  Total sliding windows: " + numWindows);
         
+        // Create subfolder for this window size
+        Path windowFolder = Paths.get(inputFolder, String.valueOf(N));
+        if (!Files.exists(windowFolder)) {
+            Files.createDirectories(windowFolder);
+            System.out.println("  Created subfolder: " + windowFolder);
+        }
+        
         for (int startMinute = 1; startMinute <= numWindows; startMinute++) {
             int endMinute = startMinute + N - 1;
             
             // Create output filename: SummaryDst_N_X_start_Y.txt
             String outputFileName = String.format("SummaryDst_N_%d_start_%d.txt", N, startMinute);
-            Path outputPath = Paths.get(inputFolder, outputFileName);
+            Path outputPath = Paths.get(windowFolder.toString(), outputFileName);
             
             System.out.println("  Processing window [" + startMinute + ", " + endMinute + "] -> " + outputFileName);
             
@@ -226,7 +233,7 @@ public class DataProcessor {
             try (BufferedWriter writer = new BufferedWriter(new FileWriter(outputPath.toString()))) {
                 // Sort flows by dstIP for consistent output
                 List<String> sortedFlows = new ArrayList<>(flowCardinality.keySet());
-                Collections.sort(sortedFlows);
+                Collections.sort(sortedFlows, Collections.reverseOrder());
                 
                 for (String dstIP : sortedFlows) {
                     int cardinality = flowCardinality.get(dstIP).size();
